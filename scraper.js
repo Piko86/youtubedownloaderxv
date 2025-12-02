@@ -21,23 +21,26 @@ async function getDownloadLinks(videoId) {
     const iframeSrc = $('#widgetv2Api').attr('src');
     if (!iframeSrc) throw new Error("Iframe not found");
 
-    const iframeUrl = iframeSrc.startsWith('http') ? iframeSrc : `https://frame.y2meta-uk.com/${iframeSrc.split('?')[1] ? iframeSrc : iframeSrc + '?videoId=' + videoId}`;
+    const iframeUrl = iframeSrc.startsWith('http') 
+      ? iframeSrc 
+      : `https://frame.y2meta-uk.com/${iframeSrc}`;
+
+    const iframeRes = await axios.get(iframeUrl, { 
+      headers: { 'User-Agent': headers['User-Agent'] } 
+    });
     
-    const iframeRes = await axios.get(iframeUrl, { headers: { 'User-Agent': headers['User-Agent'] } });
-    const \[ = cheerio.load(iframeRes.data);
+    const \] = cheerio.load(iframeRes.data);   // ←←← FIXED LINE
 
-    const title = \]('div.thumbnail.cover a').attr('title') || 'Unknown Title';
-    const thumbnail = \[ ('div.thumbnail.cover img').attr('src') || '';
-    const duration = \]('span.duration').text().trim() || 'Unknown';
+    const title = \[ ('div.thumbnail.cover a').attr('title') || 'Unknown Title';
+    const thumbnail = \]('div.thumbnail.cover img').attr('src') || '';
+    const duration = \[ ('span.duration').text().trim() || 'Unknown';
 
-    const downloads = [];
+    const downloads = []; \]('div.table tbody tr').each((i, el) => {
+      const quality = \[ (el).find('td').eq(0).text().trim();
+      const format = \](el).find('td').eq(1).text().trim().toLowerCase();
+      const size = \[ (el).find('td').eq(2).text().trim();
 
-    \[ ('div.table tbody tr').each((i, el) => {
-      const quality = \](el).find('td').eq(0).text().trim();
-      const format = \[ (el).find('td').eq(1).text().trim().toLowerCase();
-      const size = \](el).find('td').eq(2).text().trim();
-
-      const btn = $$(el).find('button.btn-file');
+      const btn = \](el).find('button.btn-file');
       if (btn.length > 0) {
         const onclick = btn.attr('onclick');
         if (onclick && onclick.includes('get_link')) {
@@ -64,7 +67,7 @@ async function getDownloadLinks(videoId) {
     };
 
   } catch (err) {
-    throw new Error("Failed to scrape: " + err.message);
+    throw new Error("Scraping failed: " + err.message);
   }
 }
 
