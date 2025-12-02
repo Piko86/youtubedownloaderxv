@@ -1,0 +1,16 @@
+services:
+  - type: web
+    name: youtubedownloaderxv
+    env: node
+    region: oregon          # or singapore / frankfurt – whichever is fastest for you
+    plan: free              # works perfectly on free tier
+    branch: main            # or master
+    buildCommand: npm install
+    startCommand: npm start
+    autoDeploy: true
+
+    # Optional: make it wake up faster (Render free tier sleeps after 15 min)
+    healthCheckPath: /api?url=https://www.youtube.com/watch?v=dQw4w9WgXcQ
+
+    envVars:
+      NODE_VERSION: ~18.20.0   # or latest stable
