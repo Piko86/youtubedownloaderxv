@@ -14,13 +14,14 @@ app.use(express.json());
 app.get('/api/', async (req, res) => {
     try {
         const youtubeUrl = req.query.url;
-        const requestedQuality = req.query.quality; // e.g., "128kbps", "48kbps", "192kbps"
+        const requestedQuality = req.query.quality; // New: quality parameter
         
         if (!youtubeUrl) {
             return res.status(400).json({
                 status: 0,
                 message: 'Please provide YouTube URL in query parameter',
-                example: `http://yourhostname/api/?url=https://youtu.be/VIDEO_ID&quality=128kbps`
+                example: `http://yourhostname/api/?url=https://youtu.be/VIDEO_ID`,
+                example_with_quality: `http://yourhostname/api/?url=https://youtu.be/VIDEO_ID&quality=128kbps`
             });
         }
 
@@ -75,8 +76,14 @@ app.get('/api/', async (req, res) => {
 
         const videoData = responseData.data;
         
-        // Collect all audio formats
-        const allAudioFormats = [];
+        // Format the response - only audio formats
+        const result = {
+            status: 1,
+            title: videoData.title,
+            thumbnail: videoData.thumbnail,
+            duration: videoData.duration,
+            audio_formats: []
+        };
 
         // Process resources - filter only audio with download_url
         if (videoData.resources && Array.isArray(videoData.resources)) {
@@ -96,104 +103,105 @@ app.get('/api/', async (req, res) => {
                         formatInfo.download_mode = resource.download_mode;
                     }
 
-                    allAudioFormats.push(formatInfo);
+                    result.audio_formats.push(formatInfo);
                 }
             });
         }
 
         // Sort audio formats by bitrate (highest first)
-        allAudioFormats.sort((a, b) => {
+        result.audio_formats.sort((a, b) => {
             // Extract bitrate number for comparison
-            const getBitrate = (quality) => {
-                // Extract numbers from quality string (e.g., "128kbps" -> 128, "48kbps" -> 48)
-                const match = quality.match(/(\d+)/);
-                return match ? parseInt(match[1]) : 0;
-            };
+            const getBitrate = (quality) => parseInt(quality) || 0;
             return getBitrate(b.quality) - getBitrate(a.quality);
         });
 
         // If no audio formats found, return error
-        if (allAudioFormats.length === 0) {
+        if (result.audio_formats.length === 0) {
             return res.status(404).json({
                 status: 0,
                 message: 'No downloadable audio formats found. The video might be restricted or unavailable.'
             });
         }
 
-        // If quality parameter is specified, find matching quality
+        // Check if quality parameter is provided
         if (requestedQuality) {
-            // Normalize the requested quality (remove spaces, convert to lowercase)
-            const normalizedQuality = requestedQuality.toLowerCase().replace(/\s/g, '');
+            // Normalize quality parameter (remove 'kbps', 'k', spaces, etc.)
+            const normalizedRequestedQuality = requestedQuality.toLowerCase()
+                .replace('kbps', '')
+                .replace('k', '')
+                .replace('bps', '')
+                .trim();
             
-            // Try different matching strategies
+            // Find the exact or closest quality match
             let matchedFormat = null;
             
-            // Strategy 1: Exact match (e.g., "128kbps")
-            matchedFormat = allAudioFormats.find(format => 
-                format.quality.toLowerCase().replace(/\s/g, '') === normalizedQuality
-            );
+            // First try exact match (e.g., "128")
+            matchedFormat = result.audio_formats.find(format => {
+                const formatQuality = format.quality.toLowerCase()
+                    .replace('kbps', '')
+                    .replace('k', '')
+                    .replace('bps', '')
+                    .trim();
+                return formatQuality === normalizedRequestedQuality;
+            });
             
-            // Strategy 2: Match just the number (e.g., "128")
+            // If no exact match, try finding the closest higher quality
             if (!matchedFormat) {
-                const qualityNumber = normalizedQuality.match(/(\d+)/);
-                if (qualityNumber) {
-                    const number = qualityNumber[1];
-                    matchedFormat = allAudioFormats.find(format => 
-                        format.quality.includes(number)
-                    );
-                }
-            }
-            
-            // Strategy 3: Find closest match
-            if (!matchedFormat) {
-                const getBitrateValue = (qualityStr) => {
-                    const match = qualityStr.match(/(\d+)/);
-                    return match ? parseInt(match[1]) : 0;
-                };
+                const requestedBitrate = parseInt(normalizedRequestedQuality) || 0;
+                let closestFormat = null;
+                let smallestDiff = Infinity;
                 
-                const requestedBitrate = getBitrateValue(normalizedQuality);
-                if (requestedBitrate > 0) {
-                    // Find format with closest bitrate
-                    matchedFormat = allAudioFormats.reduce((closest, current) => {
-                        const currentBitrate = getBitrateValue(current.quality);
-                        const closestBitrate = getBitrateValue(closest.quality);
-                        const currentDiff = Math.abs(currentBitrate - requestedBitrate);
-                        const closestDiff = Math.abs(closestBitrate - requestedBitrate);
-                        return currentDiff < closestDiff ? current : closest;
-                    });
-                }
+                result.audio_formats.forEach(format => {
+                    const formatBitrate = parseInt(format.quality) || 0;
+                    const diff = Math.abs(formatBitrate - requestedBitrate);
+                    
+                    if (diff < smallestDiff) {
+                        smallestDiff = diff;
+                        closestFormat = format;
+                    }
+                });
+                
+                matchedFormat = closestFormat;
             }
             
             if (matchedFormat) {
-                // Return the specific quality requested
-                res.json({
+                // Return the specific quality format
+                return res.json({
                     status: 1,
-                    title: videoData.title,
-                    duration: videoData.duration,
-                    thumbnail: videoData.thumbnail,
+                    title: result.title,
+                    duration: result.duration,
                     requested_quality: requestedQuality,
-                    audio_format: matchedFormat,
-                    available_qualities: allAudioFormats.map(f => f.quality)
+                    matched_quality: matchedFormat.quality,
+                    audio: matchedFormat,
+                    available_qualities: result.audio_formats.map(f => f.quality)
                 });
             } else {
-                // Return available qualities if requested quality not found
-                res.json({
+                // No matching quality found
+                return res.status(404).json({
                     status: 0,
                     message: `Requested quality '${requestedQuality}' not found`,
-                    available_qualities: allAudioFormats.map(f => f.quality),
-                    recommended: allAudioFormats[0] // Best quality
+                    available_qualities: result.audio_formats.map(f => f.quality),
+                    suggestion: 'Try one of the available qualities above'
                 });
             }
-        } else {
-            // If no quality specified, return best quality (first after sorting)
+        }
+        
+        // Return only the best audio format by default, or all if requested
+        const returnAll = req.query.all === 'true';
+        
+        if (!returnAll && result.audio_formats.length > 0) {
+            // Return only the best quality audio (first after sorting)
             res.json({
                 status: 1,
-                title: videoData.title,
-                duration: videoData.duration,
-                thumbnail: videoData.thumbnail,
-                best_audio: allAudioFormats[0],
-                available_qualities: allAudioFormats.map(f => f.quality)
+                title: result.title,
+                duration: result.duration,
+                best_audio: result.audio_formats[0],
+                available_formats: result.audio_formats.length,
+                available_qualities: result.audio_formats.map(f => f.quality)
             });
+        } else {
+            // Return all audio formats
+            res.json(result);
         }
 
     } catch (error) {
@@ -223,45 +231,12 @@ app.get('/test', (req, res) => {
         status: 1,
         message: 'API is working',
         endpoints: {
-            best_audio: '/api/?url=YOUTUBE_URL',
-            specific_quality: '/api/?url=YOUTUBE_URL&quality=128kbps',
-            list_qualities: '/api/?url=YOUTUBE_URL&quality=list'
+            audio_best: '/api/?url=YOUTUBE_URL',
+            audio_specific_quality: '/api/?url=YOUTUBE_URL&quality=128kbps',
+            audio_all_formats: '/api/?url=YOUTUBE_URL&all=true',
+            health: '/health'
         }
     });
-});
-
-// Endpoint to just list available qualities without downloading
-app.get('/api/qualities', async (req, res) => {
-    try {
-        const youtubeUrl = req.query.url;
-        
-        if (!youtubeUrl) {
-            return res.status(400).json({
-                status: 0,
-                message: 'Please provide YouTube URL'
-            });
-        }
-
-        // Call the main endpoint but modify to only return qualities list
-        const response = await axios.get(`http://localhost:${PORT}/api/?url=${encodeURIComponent(youtubeUrl)}`);
-        
-        if (response.data.status === 1) {
-            res.json({
-                status: 1,
-                title: response.data.title,
-                duration: response.data.duration,
-                available_qualities: response.data.available_qualities
-            });
-        } else {
-            res.json(response.data);
-        }
-        
-    } catch (error) {
-        res.status(500).json({
-            status: 0,
-            message: 'Failed to fetch available qualities'
-        });
-    }
 });
 
 // Root endpoint - redirect to test
@@ -274,6 +249,6 @@ app.listen(PORT, () => {
     console.log(`🚀 Server running on port ${PORT}`);
     console.log(`🎵 Best audio endpoint: http://localhost:${PORT}/api/?url=YOUTUBE_URL`);
     console.log(`🎵 Specific quality: http://localhost:${PORT}/api/?url=YOUTUBE_URL&quality=128kbps`);
-    console.log(`📋 List qualities: http://localhost:${PORT}/api/qualities?url=YOUTUBE_URL`);
+    console.log(`🎵 All audio formats: http://localhost:${PORT}/api/?url=YOUTUBE_URL&all=true`);
     console.log(`💚 Health check: http://localhost:${PORT}/health`);
 });
