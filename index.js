@@ -14,14 +14,12 @@ app.use(express.json());
 app.get('/api/', async (req, res) => {
     try {
         const youtubeUrl = req.query.url;
-        const requestedQuality = req.query.quality; // New: quality parameter
         
         if (!youtubeUrl) {
             return res.status(400).json({
                 status: 0,
                 message: 'Please provide YouTube URL in query parameter',
-                example: `http://yourhostname/api/?url=https://youtu.be/VIDEO_ID`,
-                example_with_quality: `http://yourhostname/api/?url=https://youtu.be/VIDEO_ID&quality=128kbps`
+                example: `http://yourhostname/api/?url=https://youtu.be/VIDEO_ID`
             });
         }
 
@@ -123,69 +121,6 @@ app.get('/api/', async (req, res) => {
             });
         }
 
-        // Check if quality parameter is provided
-        if (requestedQuality) {
-            // Normalize quality parameter (remove 'kbps', 'k', spaces, etc.)
-            const normalizedRequestedQuality = requestedQuality.toLowerCase()
-                .replace('kbps', '')
-                .replace('k', '')
-                .replace('bps', '')
-                .trim();
-            
-            // Find the exact or closest quality match
-            let matchedFormat = null;
-            
-            // First try exact match (e.g., "128")
-            matchedFormat = result.audio_formats.find(format => {
-                const formatQuality = format.quality.toLowerCase()
-                    .replace('kbps', '')
-                    .replace('k', '')
-                    .replace('bps', '')
-                    .trim();
-                return formatQuality === normalizedRequestedQuality;
-            });
-            
-            // If no exact match, try finding the closest higher quality
-            if (!matchedFormat) {
-                const requestedBitrate = parseInt(normalizedRequestedQuality) || 0;
-                let closestFormat = null;
-                let smallestDiff = Infinity;
-                
-                result.audio_formats.forEach(format => {
-                    const formatBitrate = parseInt(format.quality) || 0;
-                    const diff = Math.abs(formatBitrate - requestedBitrate);
-                    
-                    if (diff < smallestDiff) {
-                        smallestDiff = diff;
-                        closestFormat = format;
-                    }
-                });
-                
-                matchedFormat = closestFormat;
-            }
-            
-            if (matchedFormat) {
-                // Return the specific quality format
-                return res.json({
-                    status: 1,
-                    title: result.title,
-                    duration: result.duration,
-                    requested_quality: requestedQuality,
-                    matched_quality: matchedFormat.quality,
-                    audio: matchedFormat,
-                    available_qualities: result.audio_formats.map(f => f.quality)
-                });
-            } else {
-                // No matching quality found
-                return res.status(404).json({
-                    status: 0,
-                    message: `Requested quality '${requestedQuality}' not found`,
-                    available_qualities: result.audio_formats.map(f => f.quality),
-                    suggestion: 'Try one of the available qualities above'
-                });
-            }
-        }
-        
         // Return only the best audio format by default, or all if requested
         const returnAll = req.query.all === 'true';
         
@@ -196,8 +131,7 @@ app.get('/api/', async (req, res) => {
                 title: result.title,
                 duration: result.duration,
                 best_audio: result.audio_formats[0],
-                available_formats: result.audio_formats.length,
-                available_qualities: result.audio_formats.map(f => f.quality)
+                available_formats: result.audio_formats.length
             });
         } else {
             // Return all audio formats
@@ -231,8 +165,7 @@ app.get('/test', (req, res) => {
         status: 1,
         message: 'API is working',
         endpoints: {
-            audio_best: '/api/?url=YOUTUBE_URL',
-            audio_specific_quality: '/api/?url=YOUTUBE_URL&quality=128kbps',
+            audio: '/api/?url=YOUTUBE_URL',
             audio_all_formats: '/api/?url=YOUTUBE_URL&all=true',
             health: '/health'
         }
@@ -247,8 +180,7 @@ app.get('/', (req, res) => {
 // Start server
 app.listen(PORT, () => {
     console.log(`🚀 Server running on port ${PORT}`);
-    console.log(`🎵 Best audio endpoint: http://localhost:${PORT}/api/?url=YOUTUBE_URL`);
-    console.log(`🎵 Specific quality: http://localhost:${PORT}/api/?url=YOUTUBE_URL&quality=128kbps`);
+    console.log(`🎵 Audio endpoint: http://localhost:${PORT}/api/?url=YOUTUBE_URL`);
     console.log(`🎵 All audio formats: http://localhost:${PORT}/api/?url=YOUTUBE_URL&all=true`);
     console.log(`💚 Health check: http://localhost:${PORT}/health`);
 });
