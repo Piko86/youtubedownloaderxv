@@ -168,29 +168,36 @@ async function getVideoMetadata(youtubeUrl) {
 }
 
 // Find quality in media items
+
 function findQuality(mediaItems, quality) {
-    const qualityMap = {
-        '144p': ['144p', 'SD'],
-        '240p': ['240p', 'SD'],
-        '360p': ['360p', 'SD'],
-        '480p': ['480p', 'SD'],
-        '720p': ['720p', 'HD'],
-        '1080p': ['1080p', 'FHD'],
-        'audio': ['48K', '128K']
-    };
-    
-    const targetKeywords = qualityMap[quality] || [quality];
-    
-    return mediaItems.find(item => {
-        if (item.type === 'Video' && quality !== 'audio') {
-            return targetKeywords.some(keyword => 
-                item.mediaQuality.includes(keyword)
-            );
-        } else if (item.type === 'Audio' && quality === 'audio') {
-            return true;
-        }
-        return false;
-    });
+  const qualityMap = {
+    // Video qualities
+    '144p': ['144p', 'SD'],
+    '240p': ['240p', 'SD'],
+    '360p': ['360p', 'SD'],
+    '480p': ['480p', 'SD'],
+    '720p': ['720p', 'HD'],
+    '1080p': ['1080p', 'FHD'],
+    // Audio qualities - add specific bitrates
+    'audio': ['128K'],  // Default to 128K
+    'audio_128k': ['128K'],
+    'audio_48k': ['48K']
+  };
+  
+  const targetKeywords = qualityMap[quality] || [quality];
+  
+  return mediaItems.find(item => {
+    if (item.type === 'Video' && !quality.includes('audio')) {
+      return targetKeywords.some(keyword => item.mediaQuality.includes(keyword));
+    } else if (item.type === 'Audio' && quality.includes('audio')) {
+      // For audio, check if quality matches
+      if (quality === 'audio') {
+        return true;  // Return first audio (best quality)
+      }
+      return targetKeywords.some(keyword => item.mediaQuality.includes(keyword));
+    }
+    return false;
+  });
 }
 
 // Get available qualities
