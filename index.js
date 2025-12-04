@@ -473,6 +473,8 @@ app.get('/', (req, res) => {
                     margin: 20px 0;
                     font-family: 'Courier New', monospace;
                     font-size: 0.95rem;
+                    word-wrap: break-word;
+                    word-break: break-all;
                 }
                 
                 .code-block .highlight {
@@ -583,6 +585,45 @@ app.get('/', (req, res) => {
                     margin-top: 20px;
                     text-align: left;
                     display: none;
+                    overflow-x: auto;
+                }
+                
+                .response-area pre {
+                    white-space: pre-wrap;
+                    word-wrap: break-word;
+                    overflow-wrap: break-word;
+                    font-family: 'Courier New', monospace;
+                    font-size: 0.9rem;
+                    line-height: 1.5;
+                    margin: 0;
+                }
+                
+                /* Long URL specific styles */
+                .long-url {
+                    word-break: break-all;
+                    overflow-wrap: break-word;
+                    white-space: normal;
+                    display: block;
+                    padding: 5px;
+                    background: rgba(255,255,255,0.1);
+                    border-radius: 3px;
+                    margin: 5px 0;
+                }
+                
+                .copy-btn {
+                    background: #667eea;
+                    color: white;
+                    border: none;
+                    padding: 5px 10px;
+                    border-radius: 5px;
+                    cursor: pointer;
+                    font-size: 0.8rem;
+                    margin-left: 10px;
+                    transition: background 0.3s;
+                }
+                
+                .copy-btn:hover {
+                    background: #5a67d8;
                 }
                 
                 .footer {
@@ -615,6 +656,10 @@ app.get('/', (req, res) => {
                         border-radius: 50px;
                         padding: 15px;
                     }
+                    
+                    .response-area pre {
+                        font-size: 0.8rem;
+                    }
                 }
                 
                 /* Animation */
@@ -626,6 +671,14 @@ app.get('/', (req, res) => {
                 .fade-in {
                     animation: fadeIn 0.8s ease-out;
                 }
+                
+                /* JSON syntax highlighting */
+                .json-key { color: #c792ea; }
+                .json-string { color: #00d9ff; }
+                .json-number { color: #f78c6c; }
+                .json-boolean { color: #ff5874; }
+                .json-null { color: #ae81ff; }
+                .json-punctuation { color: #ffffff; }
             </style>
         </head>
         <body>
@@ -832,46 +885,68 @@ app.get('/', (req, res) => {
                         const response = await fetch(apiUrl);
                         const data = await response.json();
                         
-                        // Format JSON for display
-                        responseText.innerHTML = JSON.stringify(data, null, 2)
+                        // Format the response with special handling for long URLs
+                        let formattedResponse = JSON.stringify(data, null, 2);
+                        
+                        // Process for display
+                        formattedResponse = formattedResponse
                             .replace(/&/g, '&amp;')
                             .replace(/</g, '&lt;')
-                            .replace(/>/g, '&gt;')
-                            .replace(/("(\\u[a-zA-Z0-9]{4}|\\[^u]|[^\\"])*"(\\s*:)?|\b(true|false|null)\b|-?\d+(?:\.\d*)?(?:[eE][+-]?\d+)?)/g, 
-                                function(match) {
-                                    let cls = 'number';
-                                    if (/^"/.test(match)) {
-                                        if (/:$/.test(match)) {
-                                            cls = 'key';
-                                        } else {
-                                            cls = 'string';
+                            .replace(/>/g, '&gt;');
+                        
+                        // Apply JSON syntax highlighting
+                        formattedResponse = formattedResponse.replace(
+                            /("(\\u[a-zA-Z0-9]{4}|\\[^u]|[^\\"])*"(\\s*:)?|\b(true|false|null)\b|-?\d+(?:\.\d*)?(?:[eE][+-]?\d+)?)/g,
+                            function(match) {
+                                let cls = 'json-number';
+                                if (/^"/.test(match)) {
+                                    if (/:$/.test(match)) {
+                                        cls = 'json-key';
+                                    } else {
+                                        // Check if this is a very long URL
+                                        if (match.length > 100 && match.includes('http')) {
+                                            return \`<span class="json-string long-url">\${match}</span>\`;
                                         }
-                                    } else if (/true|false/.test(match)) {
-                                        cls = 'boolean';
-                                    } else if (/null/.test(match)) {
-                                        cls = 'null';
+                                        cls = 'json-string';
                                     }
-                                    return '<span class="' + cls + '">' + match + '</span>';
-                                });
+                                } else if (/true|false/.test(match)) {
+                                    cls = 'json-boolean';
+                                } else if (/null/.test(match)) {
+                                    cls = 'json-null';
+                                }
+                                return \`<span class="\${cls}">\${match}</span>\`;
+                            }
+                        );
+                        
+                        // Add punctuation highlighting
+                        formattedResponse = formattedResponse.replace(
+                            /([\{\}\[\],:])/g,
+                            '<span class="json-punctuation">$1</span>'
+                        );
+                        
+                        responseText.innerHTML = formattedResponse;
                         
                         // Scroll to response
                         responseArea.scrollIntoView({ behavior: 'smooth' });
                         
                     } catch (error) {
-                        responseText.innerHTML = 'Error: ' + error.message;
+                        responseText.innerHTML = '<span class="json-string">Error: ' + error.message + '</span>';
                     }
                 }
                 
-                // Add some styling for JSON highlighting
-                const style = document.createElement('style');
-                style.textContent = \`
-                    .string { color: #00d9ff; }
-                    .number { color: #f78c6c; }
-                    .boolean { color: #ff5874; }
-                    .null { color: #ae81ff; }
-                    .key { color: #c792ea; }
-                \`;
-                document.head.appendChild(style);
+                // Add copy URL functionality
+                document.addEventListener('click', function(e) {
+                    if (e.target.classList.contains('copy-btn')) {
+                        const urlToCopy = e.target.getAttribute('data-url');
+                        navigator.clipboard.writeText(urlToCopy).then(() => {
+                            const originalText = e.target.textContent;
+                            e.target.textContent = 'Copied!';
+                            setTimeout(() => {
+                                e.target.textContent = originalText;
+                            }, 2000);
+                        });
+                    }
+                });
                 
                 // Add example URL on click
                 document.getElementById('youtubeUrl').addEventListener('click', function() {
@@ -879,6 +954,29 @@ app.get('/', (req, res) => {
                         this.value = 'https://youtu.be/OJDHmHYW2PU';
                     }
                 });
+                
+                // Auto-resize response area
+                function autoResizeResponseArea() {
+                    const responseArea = document.getElementById('responseArea');
+                    if (responseArea.style.display !== 'none') {
+                        responseArea.style.maxHeight = '500px';
+                        responseArea.style.overflowY = 'auto';
+                    }
+                }
+                
+                // Call auto-resize when response area is shown
+                const observer = new MutationObserver(function(mutations) {
+                    mutations.forEach(function(mutation) {
+                        if (mutation.type === 'attributes' && mutation.attributeName === 'style') {
+                            autoResizeResponseArea();
+                        }
+                    });
+                });
+                
+                const responseArea = document.getElementById('responseArea');
+                if (responseArea) {
+                    observer.observe(responseArea, { attributes: true });
+                }
             </script>
         </body>
         </html>
