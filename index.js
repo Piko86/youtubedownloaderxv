@@ -1,541 +1,354 @@
-const axios = require('axios');
 const express = require('express');
+const axios = require('axios');
+const cors = require('cors');
+require('dotenv').config();
+
 const app = express();
+const PORT = process.env.PORT || 3000;
 
-const BASE_URL = 'https://ytdown.to';
-const PROCESSING_BASE = 'https://s7.ytcontent.net/v3';
+// Middleware
+app.use(cors());
+app.use(express.json());
 
-// Function to extract video ID
-function extractVideoId(url) {
-    const patterns = [
-        /(?:youtube\.com\/watch\?v=|youtu\.be\/|youtube\.com\/embed\/)([^&\n?#]+)/,
-        /^([A-Za-z0-9_-]{11})$/
-    ];
-    
-    for (const pattern of patterns) {
-        const match = url.match(pattern);
-        if (match) return match[1];
-    }
-    return null;
-}
-
-// Quality mapping from FHD/HD/SD to resolution
-const qualityMapping = {
-    'FHD': ['1080p', 'fhd', 'full hd', '1920x1080'],
-    'HD': ['720p', 'hd', 'high definition', '1280x720'],
-    'SD': ['480p', '360p', '240p', '144p', 'sd', 'standard definition'],
-    '48K': ['audio48', '48k', '48', 'audio 48'],
-    '128K': ['audio128', '128k', '128', 'audio 128']
-};
-
-// Reverse mapping for display
-const displayQuality = {
-    'FHD': '1080p',
-    'HD': '720p', 
-    'SD': '480p/360p/240p/144p',
-    '48K': '48k Audio',
-    '128K': '128k Audio'
-};
-
-// Wait for processing to complete
-async function waitForProcessing(processingUrl, maxRetries = 15, delay = 1500) {
-    const headers = {
-        'authority': 's7.ytcontent.net',
-        'accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7',
-        'accept-language': 'en-US',
-        'cache-control': 'max-age=0',
-        'sec-ch-ua': '"Chromium";v="142", "Google Chrome";v="142", "Not_A Brand";v="99"',
-        'sec-ch-ua-mobile': '?1',
-        'sec-ch-ua-platform': '"Android"',
-        'sec-fetch-dest': 'document',
-        'sec-fetch-mode': 'navigate',
-        'sec-fetch-site': 'cross-site',
-        'upgrade-insecure-requests': '1',
-        'user-agent': 'Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Mobile Safari/537.36'
-    };
-    
-    for (let i = 0; i < maxRetries; i++) {
-        try {
-            console.log(`Processing check ${i + 1}/${maxRetries}...`);
-            
-            const response = await axios.get(processingUrl, { 
-                headers,
-                timeout: 10000 
-            });
-            
-            const data = response.data;
-            
-            if (data.percent === "Completed" && data.fileUrl) {
-                return {
-                    success: true,
-                    fileName: data.fileName,
-                    fileSize: data.fileSize,
-                    fileUrl: data.fileUrl
-                };
-            } else if (data.percent && data.percent !== "Completed") {
-                await new Promise(resolve => setTimeout(resolve, delay));
-            } else {
-                return data;
-            }
-        } catch (error) {
-            if (i === maxRetries - 1) {
-                throw new Error(`Processing failed after ${maxRetries} attempts`);
-            }
-            await new Promise(resolve => setTimeout(resolve, delay));
-        }
-    }
-    
-    throw new Error('Processing timeout');
-}
-
-// Get video metadata
-async function getVideoMetadata(youtubeUrl) {
-    const headers = {
-        'authority': 'ytdown.to',
-        'accept': '*/*',
-        'accept-language': 'en-US,en;q=0.9',
-        'content-type': 'application/x-www-form-urlencoded; charset=UTF-8',
-        'origin': 'https://ytdown.to',
-        'referer': 'https://ytdown.to/en2/',
-        'sec-ch-ua': '"Chromium";v="142", "Google Chrome";v="142", "Not_A Brand";v="99"',
-        'sec-ch-ua-mobile': '?1',
-        'sec-ch-ua-platform': '"Android"',
-        'sec-fetch-dest': 'empty',
-        'sec-fetch-mode': 'cors',
-        'sec-fetch-site': 'same-origin',
-        'user-agent': 'Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Mobile Safari/537.36',
-        'x-requested-with': 'XMLHttpRequest'
-    };
-    
-    const data = new URLSearchParams({ 'url': youtubeUrl });
-    
-    const response = await axios.post(
-        `${BASE_URL}/proxy.php`,
-        data.toString(),
-        { headers, timeout: 20000 }
-    );
-    
-    return response.data.api;
-}
-
-// Main API endpoint
-app.get('/api/download', async (req, res) => {
+// Main endpoint - Audio Only
+app.get('/', async (req, res) => {
     try {
         const youtubeUrl = req.query.url;
-        const quality = req.query.quality; // e.g., "1080p", "720p", "audio128"
         
         if (!youtubeUrl) {
-            return res.status(400).json({ 
-                success: false,
-                error: 'YouTube URL is required',
-                example: '/api/download?url=https://youtu.be/VIDEO_ID&quality=1080p'
+            return res.status(400).json({
+                status: 0,
+                message: 'Please provide YouTube URL in query parameter',
+                example: 'http://localhost:3000/?url=https://youtu.be/VIDEO_ID'
             });
         }
-        
-        const videoId = extractVideoId(youtubeUrl);
-        
-        if (!videoId) {
-            return res.status(400).json({ 
-                success: false,
-                error: 'Invalid YouTube URL' 
+
+        // Validate YouTube URL
+        const youtubeRegex = /^(https?:\/\/)?(www\.)?(youtube\.com|youtu\.?be)\/.+$/;
+        if (!youtubeRegex.test(youtubeUrl)) {
+            return res.status(400).json({
+                status: 0,
+                message: 'Invalid YouTube URL'
             });
         }
-        
-        console.log(`Processing: ${videoId}, Quality: ${quality || 'all'}`);
-        
-        // Get metadata
-        const metadata = await getVideoMetadata(youtubeUrl);
-        
-        // If no quality specified, return available qualities
-        if (!quality) {
-            return getAvailableQualities(res, metadata, videoId, req);
+
+        // Headers from vidssave
+        const headers = {
+            'authority': 'vidssave.com',
+            'accept': '*/*',
+            'accept-language': 'en-US,en;q=0.5',
+            'content-type': 'application/json',
+            'origin': 'https://vidssave.com',
+            'referer': 'https://vidssave.com/yt',
+            'sec-fetch-dest': 'empty',
+            'sec-fetch-mode': 'cors',
+            'sec-fetch-site': 'same-origin',
+            'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:145.0) Gecko/20100101 Firefox/145.0',
+            'cookie': `uid=0417972-8ddd4f4-9ce78912-175a2ae7%3D1764696672487; _ga_B0QF996KX2=GS2.1.s1764696677$o1$g0$t1764696677$j60$l0$h0; _ga=GA1.1.2104826205.1764696678; _clck=19aebme%5E2%5Eg1i%5E0%5E2162; _clsk=uolpw8%5E1764696697960%5E1%5E1%5Ek.clarity.ms%2Fcollect`
+        };
+
+        // Request body
+        const requestBody = {
+            url: "/media/parse",
+            data: {
+                origin: "source",
+                link: youtubeUrl
+            },
+            token: ""
+        };
+
+        // Make POST request to vidssave API
+        const response = await axios.post('https://vidssave.com/api/proxy', requestBody, {
+            headers: headers,
+            timeout: 30000 // 30 seconds timeout
+        });
+
+        const responseData = response.data;
+
+        if (responseData.status !== 1 || !responseData.data) {
+            return res.status(500).json({
+                status: 0,
+                message: 'Failed to fetch video data from source'
+            });
         }
+
+        const videoData = responseData.data;
         
-        // If quality specified, get that specific quality
-        return await getSpecificQuality(res, metadata, quality, videoId);
-        
+        // Format the response - Only Audio
+        const result = {
+            status: 1,
+            title: videoData.title,
+            thumbnail: videoData.thumbnail,
+            duration: videoData.duration,
+            audio_formats: []
+        };
+
+        // Process resources - Only audio formats
+        if (videoData.resources && Array.isArray(videoData.resources)) {
+            videoData.resources.forEach(resource => {
+                // Only include AUDIO formats with download_url
+                if (resource.type === 'audio' && (resource.download_url || resource.download_mode === 'check_download')) {
+                    const formatInfo = {
+                        quality: resource.quality,
+                        format: resource.format || 'mp3',
+                        size: resource.size,
+                        bitrate: extractBitrate(resource.quality),
+                        download_url: resource.download_url || '',
+                        type: 'audio'
+                    };
+
+                    // Remove download_mode from response if it's empty
+                    if (resource.download_mode && resource.download_mode !== '') {
+                        formatInfo.download_mode = resource.download_mode;
+                    }
+
+                    result.audio_formats.push(formatInfo);
+                }
+            });
+        }
+
+        // Sort audio formats by bitrate (highest first)
+        result.audio_formats.sort((a, b) => {
+            return (b.bitrate || 0) - (a.bitrate || 0);
+        });
+
+        // If no audio formats found, return error
+        if (result.audio_formats.length === 0) {
+            return res.status(404).json({
+                status: 0,
+                message: 'No downloadable audio formats found. The video might be restricted or unavailable.',
+                suggestion: 'Try a different YouTube video'
+            });
+        }
+
+        res.json(result);
+
     } catch (error) {
         console.error('Error:', error.message);
-        res.status(500).json({ 
-            success: false,
-            error: 'Failed to process video',
-            details: error.message 
+        
+        res.status(500).json({
+            status: 0,
+            message: 'Failed to fetch audio information',
+            error: error.response?.data?.message || error.message
         });
     }
 });
 
-// Get available qualities (no processing)
-function getAvailableQualities(res, metadata, videoId, req) {
-    const mediaItems = metadata.mediaItems || [];
+// Helper function to extract bitrate from quality string
+function extractBitrate(quality) {
+    if (!quality) return 0;
     
-    // Organize by type with better mapping
-    const formats = [];
-    
-    mediaItems.forEach((item, index) => {
-        const isVideo = item.type === 'Video';
-        let displayName = item.mediaQuality;
-        let qualityKey = item.mediaQuality.toLowerCase();
-        
-        // Map FHD/HD/SD to user-friendly names
-        if (item.mediaQuality === 'FHD') {
-            displayName = '1080p (FHD)';
-            qualityKey = '1080p';
-        } else if (item.mediaQuality === 'HD') {
-            displayName = '720p (HD)';
-            qualityKey = '720p';
-        } else if (item.mediaQuality === 'SD') {
-            // For SD, we need to check resolution to determine exact quality
-            if (item.mediaRes) {
-                if (item.mediaRes.includes('480')) {
-                    displayName = '480p (SD)';
-                    qualityKey = '480p';
-                } else if (item.mediaRes.includes('360')) {
-                    displayName = '360p (SD)';
-                    qualityKey = '360p';
-                } else if (item.mediaRes.includes('240')) {
-                    displayName = '240p (SD)';
-                    qualityKey = '240p';
-                } else if (item.mediaRes.includes('144')) {
-                    displayName = '144p (SD)';
-                    qualityKey = '144p';
-                }
-            }
-        } else if (item.mediaQuality === '48K') {
-            displayName = '48k Audio';
-            qualityKey = 'audio48';
-        } else if (item.mediaQuality === '128K') {
-            displayName = '128k Audio';
-            qualityKey = 'audio128';
-        }
-        
-        formats.push({
-            id: qualityKey,
-            type: item.type,
-            label: `${displayName}${item.mediaRes ? ` (${item.mediaRes})` : ''}`,
-            originalQuality: item.mediaQuality,
-            resolution: item.mediaRes,
-            size: item.mediaFileSize,
-            duration: item.mediaDuration,
-            extension: item.mediaExtension,
-            downloadUrl: `/api/download?url=https://youtu.be/${videoId}&quality=${qualityKey}`,
-            apiUrl: `${req.protocol}://${req.get('host')}/api/download?url=https://youtu.be/${videoId}&quality=${qualityKey}`,
-            example: `${req.protocol}://${req.get('host')}/api/download?url=https://youtu.be/${videoId}&quality=${qualityKey}`
-        });
-    });
-    
-    // Remove duplicates
-    const uniqueFormats = [];
-    const seen = new Set();
-    
-    formats.forEach(format => {
-        if (!seen.has(format.id)) {
-            seen.add(format.id);
-            uniqueFormats.push(format);
-        }
-    });
-    
-    res.json({
-        success: true,
-        videoId: videoId,
-        title: metadata.title,
-        thumbnail: metadata.imagePreviewUrl,
-        duration: metadata.mediaItems[0]?.mediaDuration || 'N/A',
-        channel: metadata.userInfo?.name || 'Unknown',
-        formats: uniqueFormats,
-        usage: {
-            get1080p: `/api/download?url=https://youtu.be/${videoId}&quality=1080p`,
-            get720p: `/api/download?url=https://youtu.be/${videoId}&quality=720p`,
-            getAudio128: `/api/download?url=https://youtu.be/${videoId}&quality=audio128`,
-            get480p: `/api/download?url=https://youtu.be/${videoId}&quality=480p`,
-            getAll: `/api/download?url=https://youtu.be/${videoId}`
-        }
-    });
+    // Extract numbers from strings like "128kbps", "320k", "48kbps"
+    const match = quality.match(/(\d+)/);
+    return match ? parseInt(match[1]) : 0;
 }
 
-// Get specific quality
-async function getSpecificQuality(res, metadata, quality, videoId) {
-    const mediaItems = metadata.mediaItems || [];
-    
-    // Normalize quality input
-    const normalizedQuality = quality.toLowerCase().trim();
-    
-    // Find the requested quality with flexible matching
-    let targetItem = null;
-    
-    // Try to find matching item
-    for (const item of mediaItems) {
-        const itemQuality = item.mediaQuality.toLowerCase();
-        
-        // Check direct match or mapped match
-        if (item.type === 'Video') {
-            // Handle FHD -> 1080p mapping
-            if (itemQuality === 'fhd' && (normalizedQuality === '1080p' || normalizedQuality === 'fhd')) {
-                targetItem = item;
-                break;
-            }
-            // Handle HD -> 720p mapping
-            else if (itemQuality === 'hd' && (normalizedQuality === '720p' || normalizedQuality === 'hd')) {
-                targetItem = item;
-                break;
-            }
-            // Handle SD with resolution check
-            else if (itemQuality === 'sd') {
-                // Check resolution for SD items
-                if (item.mediaRes) {
-                    const res = item.mediaRes.toLowerCase();
-                    if ((normalizedQuality === '480p' && res.includes('480')) ||
-                        (normalizedQuality === '360p' && res.includes('360')) ||
-                        (normalizedQuality === '240p' && res.includes('240')) ||
-                        (normalizedQuality === '144p' && res.includes('144')) ||
-                        (normalizedQuality === 'sd')) {
-                        targetItem = item;
-                        break;
-                    }
-                }
-            }
-        } 
-        // Handle audio
-        else if (item.type === 'Audio') {
-            if ((normalizedQuality === 'audio48' || normalizedQuality === '48k') && itemQuality === '48k') {
-                targetItem = item;
-                break;
-            }
-            if ((normalizedQuality === 'audio128' || normalizedQuality === '128k') && itemQuality === '128k') {
-                targetItem = item;
-                break;
-            }
-        }
-    }
-    
-    if (!targetItem) {
-        // Generate better suggestions
-        const suggestions = [];
-        
-        mediaItems.forEach(item => {
-            if (item.type === 'Video') {
-                if (item.mediaQuality === 'FHD') suggestions.push('1080p');
-                else if (item.mediaQuality === 'HD') suggestions.push('720p');
-                else if (item.mediaQuality === 'SD' && item.mediaRes) {
-                    if (item.mediaRes.includes('480')) suggestions.push('480p');
-                    else if (item.mediaRes.includes('360')) suggestions.push('360p');
-                    else if (item.mediaRes.includes('240')) suggestions.push('240p');
-                    else if (item.mediaRes.includes('144')) suggestions.push('144p');
-                }
-            } else if (item.type === 'Audio') {
-                if (item.mediaQuality === '48K') suggestions.push('audio48');
-                else if (item.mediaQuality === '128K') suggestions.push('audio128');
-            }
-        });
-        
-        return res.status(404).json({
-            success: false,
-            error: `Quality '${quality}' not found`,
-            availableQualities: mediaItems.map(item => ({
-                type: item.type,
-                originalQuality: item.mediaQuality,
-                resolution: item.mediaRes,
-                size: item.mediaFileSize,
-                suggestedQuality: item.type === 'Video' 
-                    ? (item.mediaQuality === 'FHD' ? '1080p' : 
-                       item.mediaQuality === 'HD' ? '720p' : 
-                       item.mediaRes?.includes('480') ? '480p' :
-                       item.mediaRes?.includes('360') ? '360p' :
-                       item.mediaRes?.includes('240') ? '240p' :
-                       item.mediaRes?.includes('144') ? '144p' : 'SD')
-                    : `audio${item.mediaQuality.replace('K', '')}`
-            })),
-            suggestions: [...new Set(suggestions)], // Remove duplicates
-            tryThese: suggestions.slice(0, 3).map(q => 
-                `/api/download?url=https://youtu.be/${videoId}&quality=${q}`
-            )
-        });
-    }
-    
-    // Process the selected quality
+// Alternative endpoint for direct audio download
+app.get('/api/audio', async (req, res) => {
     try {
-        const downloadInfo = await waitForProcessing(targetItem.mediaUrl);
+        const youtubeUrl = req.query.url;
+        const format = req.query.format || 'highest'; // highest, lowest, or specific bitrate
         
-        // Determine display quality name
-        let displayQuality = targetItem.mediaQuality;
-        if (targetItem.type === 'Video') {
-            if (targetItem.mediaQuality === 'FHD') displayQuality = '1080p (FHD)';
-            else if (targetItem.mediaQuality === 'HD') displayQuality = '720p (HD)';
-            else if (targetItem.mediaQuality === 'SD' && targetItem.mediaRes) {
-                if (targetItem.mediaRes.includes('480')) displayQuality = '480p (SD)';
-                else if (targetItem.mediaRes.includes('360')) displayQuality = '360p (SD)';
-                else if (targetItem.mediaRes.includes('240')) displayQuality = '240p (SD)';
-                else if (targetItem.mediaRes.includes('144')) displayQuality = '144p (SD)';
-            }
+        if (!youtubeUrl) {
+            return res.status(400).json({
+                status: 0,
+                message: 'Please provide YouTube URL'
+            });
         }
+
+        // Get audio info
+        const response = await axios.get(`http://localhost:${PORT}/?url=${encodeURIComponent(youtubeUrl)}`, {
+            timeout: 10000
+        });
         
+        const audioData = response.data;
+        
+        if (audioData.status !== 1 || audioData.audio_formats.length === 0) {
+            return res.status(404).json({
+                status: 0,
+                message: 'No audio formats available'
+            });
+        }
+
+        // Select format based on preference
+        let selectedAudio;
+        if (format === 'highest') {
+            selectedAudio = audioData.audio_formats[0]; // Already sorted highest first
+        } else if (format === 'lowest') {
+            selectedAudio = audioData.audio_formats[audioData.audio_formats.length - 1];
+        } else {
+            // Try to match specific bitrate
+            const targetBitrate = parseInt(format);
+            selectedAudio = audioData.audio_formats.find(audio => 
+                audio.bitrate === targetBitrate || 
+                audio.quality.includes(format)
+            ) || audioData.audio_formats[0];
+        }
+
         res.json({
-            success: true,
-            videoId: videoId,
-            title: metadata.title,
-            thumbnail: metadata.imagePreviewUrl,
-            quality: displayQuality,
-            originalQuality: targetItem.mediaQuality,
-            resolution: targetItem.mediaRes || 'N/A',
-            type: targetItem.type,
-            size: targetItem.mediaFileSize,
-            duration: targetItem.mediaDuration,
-            extension: targetItem.mediaExtension,
-            downloadUrl: downloadInfo.fileUrl,
-            fileName: downloadInfo.fileName,
-            expires: 'Link expires after some time. Download quickly.',
-            otherFormats: `/api/download?url=https://youtu.be/${videoId}`
+            status: 1,
+            title: audioData.title,
+            duration: audioData.duration,
+            selected_format: selectedAudio,
+            all_formats: audioData.audio_formats
         });
         
     } catch (error) {
-        throw error;
+        res.status(500).json({
+            status: 0,
+            message: 'Failed to process audio request'
+        });
     }
-}
+});
 
-// Simple formats endpoint
-app.get('/api/formats', async (req, res) => {
+// Direct download endpoint (stream audio to client)
+app.get('/download/audio', async (req, res) => {
+    try {
+        const youtubeUrl = req.query.url;
+        const bitrate = req.query.bitrate || 'highest';
+        
+        if (!youtubeUrl) {
+            return res.status(400).json({
+                status: 0,
+                message: 'Please provide YouTube URL'
+            });
+        }
+
+        // Get audio info first
+        const infoResponse = await axios.get(`http://localhost:${PORT}/?url=${encodeURIComponent(youtubeUrl)}`);
+        
+        if (infoResponse.data.status !== 1) {
+            return res.status(404).json({
+                status: 0,
+                message: 'Audio not found'
+            });
+        }
+
+        const audioFormats = infoResponse.data.audio_formats;
+        if (audioFormats.length === 0) {
+            return res.status(404).json({
+                status: 0,
+                message: 'No audio available for download'
+            });
+        }
+
+        // Select audio format
+        let selectedAudio;
+        if (bitrate === 'highest') {
+            selectedAudio = audioFormats[0];
+        } else if (bitrate === 'lowest') {
+            selectedAudio = audioFormats[audioFormats.length - 1];
+        } else {
+            const targetBitrate = parseInt(bitrate);
+            selectedAudio = audioFormats.find(audio => audio.bitrate === targetBitrate) || audioFormats[0];
+        }
+
+        // Check if we have a direct download URL
+        if (!selectedAudio.download_url) {
+            return res.json({
+                status: 1,
+                message: 'Use this URL to download audio',
+                download_url: selectedAudio.download_url,
+                audio_info: selectedAudio
+            });
+        }
+
+        // If download_url exists, redirect to it
+        res.redirect(selectedAudio.download_url);
+        
+    } catch (error) {
+        console.error('Download error:', error.message);
+        res.status(500).json({
+            status: 0,
+            message: 'Download failed',
+            error: error.message
+        });
+    }
+});
+
+// Simple MP3 download endpoint
+app.get('/mp3', async (req, res) => {
     try {
         const youtubeUrl = req.query.url;
         
         if (!youtubeUrl) {
-            return res.status(400).json({ 
-                success: false,
-                error: 'YouTube URL is required' 
+            return res.status(400).json({
+                status: 0,
+                message: 'Please provide YouTube URL',
+                example: 'http://localhost:3000/mp3?url=https://youtu.be/VIDEO_ID'
             });
         }
+
+        // Get audio info
+        const response = await axios.get(`http://localhost:${PORT}/?url=${encodeURIComponent(youtubeUrl)}`);
         
-        const videoId = extractVideoId(youtubeUrl);
-        const metadata = await getVideoMetadata(youtubeUrl);
-        const mediaItems = metadata.mediaItems || [];
-        
-        // Generate format list with proper mapping
-        const formats = [];
-        
-        mediaItems.forEach(item => {
-            if (item.type === 'Video') {
-                if (item.mediaQuality === 'FHD') {
-                    formats.push({
-                        id: '1080p',
-                        label: '1080p (Full HD)',
-                        resolution: '1920x1080',
-                        size: item.mediaFileSize,
-                        duration: item.mediaDuration,
-                        url: `/api/download?url=${encodeURIComponent(youtubeUrl)}&quality=1080p`
-                    });
-                } else if (item.mediaQuality === 'HD') {
-                    formats.push({
-                        id: '720p',
-                        label: '720p (HD)',
-                        resolution: '1280x720',
-                        size: item.mediaFileSize,
-                        duration: item.mediaDuration,
-                        url: `/api/download?url=${encodeURIComponent(youtubeUrl)}&quality=720p`
-                    });
-                } else if (item.mediaQuality === 'SD') {
-                    // Add SD formats based on resolution
-                    if (item.mediaRes?.includes('480')) {
-                        formats.push({
-                            id: '480p',
-                            label: '480p (SD)',
-                            resolution: item.mediaRes,
-                            size: item.mediaFileSize,
-                            duration: item.mediaDuration,
-                            url: `/api/download?url=${encodeURIComponent(youtubeUrl)}&quality=480p`
-                        });
-                    } else if (item.mediaRes?.includes('360')) {
-                        formats.push({
-                            id: '360p',
-                            label: '360p (SD)',
-                            resolution: item.mediaRes,
-                            size: item.mediaFileSize,
-                            duration: item.mediaDuration,
-                            url: `/api/download?url=${encodeURIComponent(youtubeUrl)}&quality=360p`
-                        });
-                    } else if (item.mediaRes?.includes('240')) {
-                        formats.push({
-                            id: '240p',
-                            label: '240p (SD)',
-                            resolution: item.mediaRes,
-                            size: item.mediaFileSize,
-                            duration: item.mediaDuration,
-                            url: `/api/download?url=${encodeURIComponent(youtubeUrl)}&quality=240p`
-                        });
-                    } else if (item.mediaRes?.includes('144')) {
-                        formats.push({
-                            id: '144p',
-                            label: '144p (SD)',
-                            resolution: item.mediaRes,
-                            size: item.mediaFileSize,
-                            duration: item.mediaDuration,
-                            url: `/api/download?url=${encodeURIComponent(youtubeUrl)}&quality=144p`
-                        });
-                    }
-                }
-            } else if (item.type === 'Audio') {
-                if (item.mediaQuality === '48K') {
-                    formats.push({
-                        id: 'audio48',
-                        label: '48k Audio',
-                        resolution: 'Audio Only',
-                        size: item.mediaFileSize,
-                        duration: item.mediaDuration,
-                        url: `/api/download?url=${encodeURIComponent(youtubeUrl)}&quality=audio48`
-                    });
-                } else if (item.mediaQuality === '128K') {
-                    formats.push({
-                        id: 'audio128',
-                        label: '128k Audio',
-                        resolution: 'Audio Only',
-                        size: item.mediaFileSize,
-                        duration: item.mediaDuration,
-                        url: `/api/download?url=${encodeURIComponent(youtubeUrl)}&quality=audio128`
-                    });
-                }
-            }
-        });
-        
+        if (response.data.status !== 1) {
+            return res.status(404).json({
+                status: 0,
+                message: 'Could not fetch audio'
+            });
+        }
+
+        // Find the best MP3 format (highest bitrate)
+        const mp3Formats = response.data.audio_formats.filter(audio => 
+            audio.format === 'mp3' || audio.format.includes('audio')
+        );
+
+        if (mp3Formats.length === 0) {
+            return res.status(404).json({
+                status: 0,
+                message: 'No MP3 format available'
+            });
+        }
+
+        const bestMp3 = mp3Formats[0]; // Already sorted by bitrate
+
         res.json({
-            success: true,
-            videoId: videoId,
-            title: metadata.title,
-            thumbnail: metadata.imagePreviewUrl,
-            formats: formats
+            status: 1,
+            title: response.data.title,
+            duration: response.data.duration,
+            download_url: bestMp3.download_url,
+            quality: bestMp3.quality,
+            size: bestMp3.size,
+            format: 'mp3'
         });
-        
+
     } catch (error) {
-        res.status(500).json({ 
-            success: false,
-            error: error.message 
+        res.status(500).json({
+            status: 0,
+            message: 'Failed to get MP3'
         });
     }
 });
 
-// Health check
-app.get('/', (req, res) => {
-    const baseUrl = `${req.protocol}://${req.get('host')}`;
-    
-    res.json({
-        message: 'YouTube Downloader API',
-        version: '3.0',
-        note: 'Now supports 1080p, 720p, 480p, audio128, etc.',
+// Health check endpoint
+app.get('/health', (req, res) => {
+    res.json({ 
+        status: 'OK', 
+        service: 'YouTube Audio Downloader API',
+        version: '1.0.0',
+        timestamp: new Date().toISOString(),
         endpoints: {
-            getFormats: '/api/formats?url=YOUTUBE_URL',
-            download: '/api/download?url=YOUTUBE_URL&quality=QUALITY',
-            examples: {
-                formats: `${baseUrl}/api/formats?url=https://youtu.be/5Ei6GhRiNmo`,
-                download1080p: `${baseUrl}/api/download?url=https://youtu.be/5Ei6GhRiNmo&quality=1080p`,
-                download720p: `${baseUrl}/api/download?url=https://youtu.be/5Ei6GhRiNmo&quality=720p`,
-                downloadAudio128: `${baseUrl}/api/download?url=https://youtu.be/5Ei6GhRiNmo&quality=audio128`
-            }
+            main: '/?url=YOUTUBE_URL',
+            audio: '/api/audio?url=YOUTUBE_URL',
+            download: '/download/audio?url=YOUTUBE_URL',
+            mp3: '/mp3?url=YOUTUBE_URL',
+            health: '/health'
         }
     });
 });
 
-const PORT = process.env.PORT || 3000;
+// Start server
 app.listen(PORT, () => {
+    console.log(`🎵 YouTube Audio Downloader API`);
     console.log(`🚀 Server running on port ${PORT}`);
-    console.log(`📡 Try these examples:`);
-    console.log(`   All formats: http://localhost:${PORT}/api/formats?url=https://youtu.be/5Ei6GhRiNmo`);
-    console.log(`   1080p video: http://localhost:${PORT}/api/download?url=https://youtu.be/5Ei6GhRiNmo&quality=1080p`);
-    console.log(`   720p video: http://localhost:${PORT}/api/download?url=https://youtu.be/5Ei6GhRiNmo&quality=720p`);
-    console.log(`   128k audio: http://localhost:${PORT}/api/download?url=https://youtu.be/5Ei6GhRiNmo&quality=audio128`);
+    console.log(`\n📋 Available Endpoints:`);
+    console.log(`├─ 🎧 Main: http://localhost:${PORT}/?url=YOUTUBE_URL`);
+    console.log(`├─ 🔊 Audio Info: http://localhost:${PORT}/api/audio?url=YOUTUBE_URL`);
+    console.log(`├─ ⬇️ Download: http://localhost:${PORT}/download/audio?url=YOUTUBE_URL`);
+    console.log(`├─ 🎵 MP3: http://localhost:${PORT}/mp3?url=YOUTUBE_URL`);
+    console.log(`└─ 💚 Health: http://localhost:${PORT}/health`);
+    console.log(`\n💡 Examples:`);
+    console.log(`- http://localhost:${PORT}/?url=https://youtu.be/dQw4w9WgXcQ`);
+    console.log(`- http://localhost:${PORT}/mp3?url=https://youtu.be/dQw4w9WgXcQ`);
 });
