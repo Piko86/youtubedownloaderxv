@@ -19,6 +19,24 @@ function extractVideoId(url) {
     return null;
 }
 
+// Quality mapping from FHD/HD/SD to resolution
+const qualityMapping = {
+    'FHD': ['1080p', 'fhd', 'full hd', '1920x1080'],
+    'HD': ['720p', 'hd', 'high definition', '1280x720'],
+    'SD': ['480p', '360p', '240p', '144p', 'sd', 'standard definition'],
+    '48K': ['audio48', '48k', '48', 'audio 48'],
+    '128K': ['audio128', '128k', '128', 'audio 128']
+};
+
+// Reverse mapping for display
+const displayQuality = {
+    'FHD': '1080p',
+    'HD': '720p', 
+    'SD': '480p/360p/240p/144p',
+    '48K': '48k Audio',
+    '128K': '128k Audio'
+};
+
 // Wait for processing to complete
 async function waitForProcessing(processingUrl, maxRetries = 15, delay = 1500) {
     const headers = {
@@ -38,6 +56,8 @@ async function waitForProcessing(processingUrl, maxRetries = 15, delay = 1500) {
     
     for (let i = 0; i < maxRetries; i++) {
         try {
+            console.log(`Processing check ${i + 1}/${maxRetries}...`);
+            
             const response = await axios.get(processingUrl, { 
                 headers,
                 timeout: 10000 
@@ -102,13 +122,13 @@ async function getVideoMetadata(youtubeUrl) {
 app.get('/api/download', async (req, res) => {
     try {
         const youtubeUrl = req.query.url;
-        const quality = req.query.quality; // e.g., "720p", "1080p", "audio48", "audio128"
+        const quality = req.query.quality; // e.g., "1080p", "720p", "audio128"
         
         if (!youtubeUrl) {
             return res.status(400).json({ 
                 success: false,
                 error: 'YouTube URL is required',
-                example: '/api/download?url=https://youtu.be/VIDEO_ID&quality=720p'
+                example: '/api/download?url=https://youtu.be/VIDEO_ID&quality=1080p'
             });
         }
         
@@ -121,12 +141,14 @@ app.get('/api/download', async (req, res) => {
             });
         }
         
+        console.log(`Processing: ${videoId}, Quality: ${quality || 'all'}`);
+        
         // Get metadata
         const metadata = await getVideoMetadata(youtubeUrl);
         
         // If no quality specified, return available qualities
         if (!quality) {
-            return getAvailableQualities(res, metadata, videoId);
+            return getAvailableQualities(res, metadata, videoId, req);
         }
         
         // If quality specified, get that specific quality
@@ -143,47 +165,73 @@ app.get('/api/download', async (req, res) => {
 });
 
 // Get available qualities (no processing)
-function getAvailableQualities(res, metadata, videoId) {
+function getAvailableQualities(res, metadata, videoId, req) {
     const mediaItems = metadata.mediaItems || [];
     
-    // Organize by type
-    const videoQualities = [];
-    const audioQualities = [];
+    // Organize by type with better mapping
+    const formats = [];
     
-    mediaItems.forEach(item => {
-        if (item.type === 'Video') {
-            videoQualities.push({
-                id: `video_${item.mediaQuality.toLowerCase().replace('p', '')}`,
-                label: `${item.mediaQuality} (${item.mediaRes})`,
-                quality: item.mediaQuality,
-                resolution: item.mediaRes,
-                size: item.mediaFileSize,
-                duration: item.mediaDuration,
-                extension: item.mediaExtension,
-                exampleUrl: `/api/download?url=https://youtu.be/${videoId}&quality=${item.mediaQuality}`,
-                directExample: `${req.protocol}://${req.get('host')}/api/download?url=https://youtu.be/${videoId}&quality=${item.mediaQuality}`
-            });
-        } else if (item.type === 'Audio') {
-            audioQualities.push({
-                id: `audio_${item.mediaQuality.toLowerCase().replace('k', '')}`,
-                label: `Audio ${item.mediaQuality}`,
-                quality: item.mediaQuality,
-                size: item.mediaFileSize,
-                duration: item.mediaDuration,
-                extension: item.mediaExtension,
-                exampleUrl: `/api/download?url=https://youtu.be/${videoId}&quality=audio${item.mediaQuality.replace('K', '')}`,
-                directExample: `${req.protocol}://${req.get('host')}/api/download?url=https://youtu.be/${videoId}&quality=audio${item.mediaQuality.replace('K', '')}`
-            });
+    mediaItems.forEach((item, index) => {
+        const isVideo = item.type === 'Video';
+        let displayName = item.mediaQuality;
+        let qualityKey = item.mediaQuality.toLowerCase();
+        
+        // Map FHD/HD/SD to user-friendly names
+        if (item.mediaQuality === 'FHD') {
+            displayName = '1080p (FHD)';
+            qualityKey = '1080p';
+        } else if (item.mediaQuality === 'HD') {
+            displayName = '720p (HD)';
+            qualityKey = '720p';
+        } else if (item.mediaQuality === 'SD') {
+            // For SD, we need to check resolution to determine exact quality
+            if (item.mediaRes) {
+                if (item.mediaRes.includes('480')) {
+                    displayName = '480p (SD)';
+                    qualityKey = '480p';
+                } else if (item.mediaRes.includes('360')) {
+                    displayName = '360p (SD)';
+                    qualityKey = '360p';
+                } else if (item.mediaRes.includes('240')) {
+                    displayName = '240p (SD)';
+                    qualityKey = '240p';
+                } else if (item.mediaRes.includes('144')) {
+                    displayName = '144p (SD)';
+                    qualityKey = '144p';
+                }
+            }
+        } else if (item.mediaQuality === '48K') {
+            displayName = '48k Audio';
+            qualityKey = 'audio48';
+        } else if (item.mediaQuality === '128K') {
+            displayName = '128k Audio';
+            qualityKey = 'audio128';
         }
+        
+        formats.push({
+            id: qualityKey,
+            type: item.type,
+            label: `${displayName}${item.mediaRes ? ` (${item.mediaRes})` : ''}`,
+            originalQuality: item.mediaQuality,
+            resolution: item.mediaRes,
+            size: item.mediaFileSize,
+            duration: item.mediaDuration,
+            extension: item.mediaExtension,
+            downloadUrl: `/api/download?url=https://youtu.be/${videoId}&quality=${qualityKey}`,
+            apiUrl: `${req.protocol}://${req.get('host')}/api/download?url=https://youtu.be/${videoId}&quality=${qualityKey}`,
+            example: `${req.protocol}://${req.get('host')}/api/download?url=https://youtu.be/${videoId}&quality=${qualityKey}`
+        });
     });
     
-    // Sort video qualities from highest to lowest
-    videoQualities.sort((a, b) => {
-        const getResValue = (quality) => {
-            const match = quality.match(/(\d+)/);
-            return match ? parseInt(match[1]) : 0;
-        };
-        return getResValue(b.quality) - getResValue(a.quality);
+    // Remove duplicates
+    const uniqueFormats = [];
+    const seen = new Set();
+    
+    formats.forEach(format => {
+        if (!seen.has(format.id)) {
+            seen.add(format.id);
+            uniqueFormats.push(format);
+        }
     });
     
     res.json({
@@ -191,20 +239,15 @@ function getAvailableQualities(res, metadata, videoId) {
         videoId: videoId,
         title: metadata.title,
         thumbnail: metadata.imagePreviewUrl,
-        duration: videoQualities[0]?.duration || 'N/A',
+        duration: metadata.mediaItems[0]?.mediaDuration || 'N/A',
         channel: metadata.userInfo?.name || 'Unknown',
-        availableFormats: {
-            video: videoQualities,
-            audio: audioQualities
-        },
+        formats: uniqueFormats,
         usage: {
-            getSpecificVideo: '/api/download?url=YOUTUBE_URL&quality=QUALITY',
-            getSpecificAudio: '/api/download?url=YOUTUBE_URL&quality=audioQUALITY',
-            examples: {
-                video_720p: `/api/download?url=https://youtu.be/${videoId}&quality=720p`,
-                audio_128k: `/api/download?url=https://youtu.be/${videoId}&quality=audio128`,
-                allQualities: `/api/download?url=https://youtu.be/${videoId}`
-            }
+            get1080p: `/api/download?url=https://youtu.be/${videoId}&quality=1080p`,
+            get720p: `/api/download?url=https://youtu.be/${videoId}&quality=720p`,
+            getAudio128: `/api/download?url=https://youtu.be/${videoId}&quality=audio128`,
+            get480p: `/api/download?url=https://youtu.be/${videoId}&quality=480p`,
+            getAll: `/api/download?url=https://youtu.be/${videoId}`
         }
     });
 }
@@ -213,44 +256,98 @@ function getAvailableQualities(res, metadata, videoId) {
 async function getSpecificQuality(res, metadata, quality, videoId) {
     const mediaItems = metadata.mediaItems || [];
     
-    // Find the requested quality
+    // Normalize quality input
+    const normalizedQuality = quality.toLowerCase().trim();
+    
+    // Find the requested quality with flexible matching
     let targetItem = null;
     
-    // Check for video qualities
-    if (quality.includes('p') || ['144', '240', '360', '480', '720', '1080', '1440', '2160'].some(q => quality.includes(q))) {
-        targetItem = mediaItems.find(item => 
-            item.type === 'Video' && 
-            (item.mediaQuality === quality || 
-             item.mediaQuality.includes(quality) ||
-             quality.includes(item.mediaQuality.replace('p', '')))
-        );
-    } 
-    // Check for audio qualities
-    else if (quality.includes('audio') || quality.includes('k') || quality.includes('K')) {
-        const audioQuality = quality.replace('audio', '').replace('k', 'K');
-        targetItem = mediaItems.find(item => 
-            item.type === 'Audio' && 
-            (item.mediaQuality === audioQuality || 
-             item.mediaQuality.includes(audioQuality))
-        );
+    // Try to find matching item
+    for (const item of mediaItems) {
+        const itemQuality = item.mediaQuality.toLowerCase();
+        
+        // Check direct match or mapped match
+        if (item.type === 'Video') {
+            // Handle FHD -> 1080p mapping
+            if (itemQuality === 'fhd' && (normalizedQuality === '1080p' || normalizedQuality === 'fhd')) {
+                targetItem = item;
+                break;
+            }
+            // Handle HD -> 720p mapping
+            else if (itemQuality === 'hd' && (normalizedQuality === '720p' || normalizedQuality === 'hd')) {
+                targetItem = item;
+                break;
+            }
+            // Handle SD with resolution check
+            else if (itemQuality === 'sd') {
+                // Check resolution for SD items
+                if (item.mediaRes) {
+                    const res = item.mediaRes.toLowerCase();
+                    if ((normalizedQuality === '480p' && res.includes('480')) ||
+                        (normalizedQuality === '360p' && res.includes('360')) ||
+                        (normalizedQuality === '240p' && res.includes('240')) ||
+                        (normalizedQuality === '144p' && res.includes('144')) ||
+                        (normalizedQuality === 'sd')) {
+                        targetItem = item;
+                        break;
+                    }
+                }
+            }
+        } 
+        // Handle audio
+        else if (item.type === 'Audio') {
+            if ((normalizedQuality === 'audio48' || normalizedQuality === '48k') && itemQuality === '48k') {
+                targetItem = item;
+                break;
+            }
+            if ((normalizedQuality === 'audio128' || normalizedQuality === '128k') && itemQuality === '128k') {
+                targetItem = item;
+                break;
+            }
+        }
     }
     
     if (!targetItem) {
-        // List available qualities in error response
-        const availableQualities = mediaItems.map(item => ({
-            type: item.type,
-            quality: item.mediaQuality,
-            size: item.mediaFileSize
-        }));
+        // Generate better suggestions
+        const suggestions = [];
+        
+        mediaItems.forEach(item => {
+            if (item.type === 'Video') {
+                if (item.mediaQuality === 'FHD') suggestions.push('1080p');
+                else if (item.mediaQuality === 'HD') suggestions.push('720p');
+                else if (item.mediaQuality === 'SD' && item.mediaRes) {
+                    if (item.mediaRes.includes('480')) suggestions.push('480p');
+                    else if (item.mediaRes.includes('360')) suggestions.push('360p');
+                    else if (item.mediaRes.includes('240')) suggestions.push('240p');
+                    else if (item.mediaRes.includes('144')) suggestions.push('144p');
+                }
+            } else if (item.type === 'Audio') {
+                if (item.mediaQuality === '48K') suggestions.push('audio48');
+                else if (item.mediaQuality === '128K') suggestions.push('audio128');
+            }
+        });
         
         return res.status(404).json({
             success: false,
             error: `Quality '${quality}' not found`,
-            availableQualities: availableQualities,
-            suggestions: {
-                video: mediaItems.filter(item => item.type === 'Video').map(item => item.mediaQuality),
-                audio: mediaItems.filter(item => item.type === 'Audio').map(item => `audio${item.mediaQuality.replace('K', '')}`)
-            }
+            availableQualities: mediaItems.map(item => ({
+                type: item.type,
+                originalQuality: item.mediaQuality,
+                resolution: item.mediaRes,
+                size: item.mediaFileSize,
+                suggestedQuality: item.type === 'Video' 
+                    ? (item.mediaQuality === 'FHD' ? '1080p' : 
+                       item.mediaQuality === 'HD' ? '720p' : 
+                       item.mediaRes?.includes('480') ? '480p' :
+                       item.mediaRes?.includes('360') ? '360p' :
+                       item.mediaRes?.includes('240') ? '240p' :
+                       item.mediaRes?.includes('144') ? '144p' : 'SD')
+                    : `audio${item.mediaQuality.replace('K', '')}`
+            })),
+            suggestions: [...new Set(suggestions)], // Remove duplicates
+            tryThese: suggestions.slice(0, 3).map(q => 
+                `/api/download?url=https://youtu.be/${videoId}&quality=${q}`
+            )
         });
     }
     
@@ -258,12 +355,26 @@ async function getSpecificQuality(res, metadata, quality, videoId) {
     try {
         const downloadInfo = await waitForProcessing(targetItem.mediaUrl);
         
+        // Determine display quality name
+        let displayQuality = targetItem.mediaQuality;
+        if (targetItem.type === 'Video') {
+            if (targetItem.mediaQuality === 'FHD') displayQuality = '1080p (FHD)';
+            else if (targetItem.mediaQuality === 'HD') displayQuality = '720p (HD)';
+            else if (targetItem.mediaQuality === 'SD' && targetItem.mediaRes) {
+                if (targetItem.mediaRes.includes('480')) displayQuality = '480p (SD)';
+                else if (targetItem.mediaRes.includes('360')) displayQuality = '360p (SD)';
+                else if (targetItem.mediaRes.includes('240')) displayQuality = '240p (SD)';
+                else if (targetItem.mediaRes.includes('144')) displayQuality = '144p (SD)';
+            }
+        }
+        
         res.json({
             success: true,
             videoId: videoId,
             title: metadata.title,
             thumbnail: metadata.imagePreviewUrl,
-            quality: targetItem.mediaQuality,
+            quality: displayQuality,
+            originalQuality: targetItem.mediaQuality,
             resolution: targetItem.mediaRes || 'N/A',
             type: targetItem.type,
             size: targetItem.mediaFileSize,
@@ -280,7 +391,7 @@ async function getSpecificQuality(res, metadata, quality, videoId) {
     }
 }
 
-// Simple list endpoint for frontend
+// Simple formats endpoint
 app.get('/api/formats', async (req, res) => {
     try {
         const youtubeUrl = req.query.url;
@@ -296,26 +407,90 @@ app.get('/api/formats', async (req, res) => {
         const metadata = await getVideoMetadata(youtubeUrl);
         const mediaItems = metadata.mediaItems || [];
         
-        // Simple format list for frontend
-        const formats = mediaItems.map(item => {
-            const isVideo = item.type === 'Video';
-            const qualityId = isVideo ? 
-                item.mediaQuality.toLowerCase() : 
-                `audio${item.mediaQuality.replace('K', '')}`;
-            
-            return {
-                id: qualityId,
-                type: item.type,
-                label: isVideo ? 
-                    `${item.mediaQuality} Video (${item.mediaRes})` : 
-                    `Audio ${item.mediaQuality}`,
-                quality: item.mediaQuality,
-                resolution: item.mediaRes,
-                size: item.mediaFileSize,
-                duration: item.mediaDuration,
-                downloadUrl: `/api/download?url=${encodeURIComponent(youtubeUrl)}&quality=${qualityId}`,
-                apiUrl: `${req.protocol}://${req.get('host')}/api/download?url=${encodeURIComponent(youtubeUrl)}&quality=${qualityId}`
-            };
+        // Generate format list with proper mapping
+        const formats = [];
+        
+        mediaItems.forEach(item => {
+            if (item.type === 'Video') {
+                if (item.mediaQuality === 'FHD') {
+                    formats.push({
+                        id: '1080p',
+                        label: '1080p (Full HD)',
+                        resolution: '1920x1080',
+                        size: item.mediaFileSize,
+                        duration: item.mediaDuration,
+                        url: `/api/download?url=${encodeURIComponent(youtubeUrl)}&quality=1080p`
+                    });
+                } else if (item.mediaQuality === 'HD') {
+                    formats.push({
+                        id: '720p',
+                        label: '720p (HD)',
+                        resolution: '1280x720',
+                        size: item.mediaFileSize,
+                        duration: item.mediaDuration,
+                        url: `/api/download?url=${encodeURIComponent(youtubeUrl)}&quality=720p`
+                    });
+                } else if (item.mediaQuality === 'SD') {
+                    // Add SD formats based on resolution
+                    if (item.mediaRes?.includes('480')) {
+                        formats.push({
+                            id: '480p',
+                            label: '480p (SD)',
+                            resolution: item.mediaRes,
+                            size: item.mediaFileSize,
+                            duration: item.mediaDuration,
+                            url: `/api/download?url=${encodeURIComponent(youtubeUrl)}&quality=480p`
+                        });
+                    } else if (item.mediaRes?.includes('360')) {
+                        formats.push({
+                            id: '360p',
+                            label: '360p (SD)',
+                            resolution: item.mediaRes,
+                            size: item.mediaFileSize,
+                            duration: item.mediaDuration,
+                            url: `/api/download?url=${encodeURIComponent(youtubeUrl)}&quality=360p`
+                        });
+                    } else if (item.mediaRes?.includes('240')) {
+                        formats.push({
+                            id: '240p',
+                            label: '240p (SD)',
+                            resolution: item.mediaRes,
+                            size: item.mediaFileSize,
+                            duration: item.mediaDuration,
+                            url: `/api/download?url=${encodeURIComponent(youtubeUrl)}&quality=240p`
+                        });
+                    } else if (item.mediaRes?.includes('144')) {
+                        formats.push({
+                            id: '144p',
+                            label: '144p (SD)',
+                            resolution: item.mediaRes,
+                            size: item.mediaFileSize,
+                            duration: item.mediaDuration,
+                            url: `/api/download?url=${encodeURIComponent(youtubeUrl)}&quality=144p`
+                        });
+                    }
+                }
+            } else if (item.type === 'Audio') {
+                if (item.mediaQuality === '48K') {
+                    formats.push({
+                        id: 'audio48',
+                        label: '48k Audio',
+                        resolution: 'Audio Only',
+                        size: item.mediaFileSize,
+                        duration: item.mediaDuration,
+                        url: `/api/download?url=${encodeURIComponent(youtubeUrl)}&quality=audio48`
+                    });
+                } else if (item.mediaQuality === '128K') {
+                    formats.push({
+                        id: 'audio128',
+                        label: '128k Audio',
+                        resolution: 'Audio Only',
+                        size: item.mediaFileSize,
+                        duration: item.mediaDuration,
+                        url: `/api/download?url=${encodeURIComponent(youtubeUrl)}&quality=audio128`
+                    });
+                }
+            }
         });
         
         res.json({
@@ -334,172 +509,22 @@ app.get('/api/formats', async (req, res) => {
     }
 });
 
-// Direct download with HTML page
-app.get('/download', async (req, res) => {
-    try {
-        const youtubeUrl = req.query.url;
-        const quality = req.query.quality;
-        
-        if (!youtubeUrl) {
-            return res.send(`
-                <html>
-                    <head><title>YouTube Downloader</title></head>
-                    <body>
-                        <h1>YouTube Video Downloader</h1>
-                        <form method="GET">
-                            <input type="text" name="url" placeholder="Enter YouTube URL" size="50">
-                            <button type="submit">Get Formats</button>
-                        </form>
-                    </body>
-                </html>
-            `);
-        }
-        
-        const videoId = extractVideoId(youtubeUrl);
-        
-        if (!quality) {
-            // Show available formats
-            const metadata = await getVideoMetadata(youtubeUrl);
-            const mediaItems = metadata.mediaItems || [];
-            
-            let html = `
-                <html>
-                    <head>
-                        <title>Download: ${metadata.title}</title>
-                        <style>
-                            body { font-family: Arial, sans-serif; max-width: 800px; margin: 0 auto; padding: 20px; }
-                            .video-info { background: #f5f5f5; padding: 20px; border-radius: 10px; margin-bottom: 20px; }
-                            .thumbnail { max-width: 100%; border-radius: 8px; }
-                            .format-list { display: grid; gap: 10px; }
-                            .format-item { 
-                                background: white; 
-                                padding: 15px; 
-                                border-radius: 8px; 
-                                border: 1px solid #ddd;
-                                display: flex; 
-                                justify-content: space-between;
-                                align-items: center;
-                            }
-                            .download-btn { 
-                                background: #ff0000; 
-                                color: white; 
-                                padding: 8px 16px; 
-                                border-radius: 4px; 
-                                text-decoration: none;
-                            }
-                        </style>
-                    </head>
-                    <body>
-                        <div class="video-info">
-                            <h2>${metadata.title}</h2>
-                            <img src="${metadata.imagePreviewUrl}" class="thumbnail" width="400">
-                            <p>Channel: ${metadata.userInfo?.name || 'Unknown'}</p>
-                        </div>
-                        
-                        <h3>Available Formats:</h3>
-                        <div class="format-list">
-            `;
-            
-            // Video formats
-            html += `<h4>Video Formats:</h4>`;
-            mediaItems.filter(item => item.type === 'Video').forEach(item => {
-                html += `
-                    <div class="format-item">
-                        <div>
-                            <strong>${item.mediaQuality}</strong> (${item.mediaRes})<br>
-                            <small>${item.mediaFileSize} • ${item.mediaDuration}</small>
-                        </div>
-                        <a href="/download?url=${encodeURIComponent(youtubeUrl)}&quality=${item.mediaQuality}" 
-                           class="download-btn" target="_blank">
-                            Download
-                        </a>
-                    </div>
-                `;
-            });
-            
-            // Audio formats
-            html += `<h4>Audio Formats:</h4>`;
-            mediaItems.filter(item => item.type === 'Audio').forEach(item => {
-                const audioQuality = `audio${item.mediaQuality.replace('K', '')}`;
-                html += `
-                    <div class="format-item">
-                        <div>
-                            <strong>${item.mediaQuality} Audio</strong><br>
-                            <small>${item.mediaFileSize} • ${item.mediaDuration}</small>
-                        </div>
-                        <a href="/download?url=${encodeURIComponent(youtubeUrl)}&quality=${audioQuality}" 
-                           class="download-btn" target="_blank">
-                            Download
-                        </a>
-                    </div>
-                `;
-            });
-            
-            html += `
-                        </div>
-                    </body>
-                </html>
-            `;
-            
-            return res.send(html);
-        }
-        
-        // Download specific quality
-        const metadata = await getVideoMetadata(youtubeUrl);
-        const downloadInfo = await getSpecificQualityForDownload(metadata, quality);
-        
-        // Redirect to download URL
-        res.redirect(downloadInfo.fileUrl);
-        
-    } catch (error) {
-        res.send(`
-            <html>
-                <head><title>Error</title></head>
-                <body>
-                    <h1>Error</h1>
-                    <p>${error.message}</p>
-                    <a href="/download">Go Back</a>
-                </body>
-            </html>
-        `);
-    }
-});
-
-async function getSpecificQualityForDownload(metadata, quality) {
-    const mediaItems = metadata.mediaItems || [];
-    let targetItem = null;
-    
-    if (quality.includes('audio')) {
-        const audioQuality = quality.replace('audio', '') + 'K';
-        targetItem = mediaItems.find(item => 
-            item.type === 'Audio' && item.mediaQuality === audioQuality
-        );
-    } else {
-        targetItem = mediaItems.find(item => 
-            item.type === 'Video' && item.mediaQuality === quality
-        );
-    }
-    
-    if (!targetItem) {
-        throw new Error(`Quality ${quality} not found`);
-    }
-    
-    return await waitForProcessing(targetItem.mediaUrl);
-}
-
 // Health check
 app.get('/', (req, res) => {
+    const baseUrl = `${req.protocol}://${req.get('host')}`;
+    
     res.json({
         message: 'YouTube Downloader API',
-        version: '2.0',
+        version: '3.0',
+        note: 'Now supports 1080p, 720p, 480p, audio128, etc.',
         endpoints: {
             getFormats: '/api/formats?url=YOUTUBE_URL',
-            downloadSpecific: '/api/download?url=YOUTUBE_URL&quality=QUALITY',
-            webInterface: '/download?url=YOUTUBE_URL',
+            download: '/api/download?url=YOUTUBE_URL&quality=QUALITY',
             examples: {
-                video_720p: '/api/download?url=https://youtu.be/GdtNy-3pKM4&quality=720p',
-                audio_128k: '/api/download?url=https://youtu.be/GdtNy-3pKM4&quality=audio128',
-                allFormats: '/api/formats?url=https://youtu.be/GdtNy-3pKM4'
+                formats: `${baseUrl}/api/formats?url=https://youtu.be/5Ei6GhRiNmo`,
+                download1080p: `${baseUrl}/api/download?url=https://youtu.be/5Ei6GhRiNmo&quality=1080p`,
+                download720p: `${baseUrl}/api/download?url=https://youtu.be/5Ei6GhRiNmo&quality=720p`,
+                downloadAudio128: `${baseUrl}/api/download?url=https://youtu.be/5Ei6GhRiNmo&quality=audio128`
             }
         }
     });
@@ -508,6 +533,9 @@ app.get('/', (req, res) => {
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
     console.log(`🚀 Server running on port ${PORT}`);
-    console.log(`🌐 Web Interface: http://localhost:${PORT}/download`);
-    console.log(`📡 API: http://localhost:${PORT}/api/formats?url=https://youtu.be/GdtNy-3pKM4`);
+    console.log(`📡 Try these examples:`);
+    console.log(`   All formats: http://localhost:${PORT}/api/formats?url=https://youtu.be/5Ei6GhRiNmo`);
+    console.log(`   1080p video: http://localhost:${PORT}/api/download?url=https://youtu.be/5Ei6GhRiNmo&quality=1080p`);
+    console.log(`   720p video: http://localhost:${PORT}/api/download?url=https://youtu.be/5Ei6GhRiNmo&quality=720p`);
+    console.log(`   128k audio: http://localhost:${PORT}/api/download?url=https://youtu.be/5Ei6GhRiNmo&quality=audio128`);
 });
