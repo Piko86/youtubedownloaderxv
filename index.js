@@ -172,32 +172,94 @@ async function getVideoMetadata(youtubeUrl) {
 function findQuality(mediaItems, quality) {
   const qualityMap = {
     // Video qualities
-    '144p': ['144p', 'SD'],
-    '240p': ['240p', 'SD'],
-    '360p': ['360p', 'SD'],
-    '480p': ['480p', 'SD'],
+    '144p': ['144p'],
+    '240p': ['240p'],
+    '360p': ['360p'],
+    '480p': ['480p'],
     '720p': ['720p', 'HD'],
     '1080p': ['1080p', 'FHD'],
-    // Audio qualities - add specific bitrates
-    'audio': ['128K'],  // Default to 128K
+    // Audio qualities
+    'audio': ['128K', '48K'],  // Accept any audio
     'audio_128k': ['128K'],
     'audio_48k': ['48K']
   };
   
   const targetKeywords = qualityMap[quality] || [quality];
   
-  return mediaItems.find(item => {
+  // First, try to find exact match
+  if (quality.includes('p')) {
+    // For video qualities, try exact resolution first
+    const exactMatch = mediaItems.find(item => {
+      if (item.type === 'Video' && !quality.includes('audio')) {
+        return item.mediaQuality === quality;
+      }
+      return false;
+    });
+    
+    if (exactMatch) return exactMatch;
+  }
+  
+  // If no exact match, fall back to keyword matching
+  // But filter and sort to get the closest quality
+  const filteredItems = mediaItems.filter(item => {
     if (item.type === 'Video' && !quality.includes('audio')) {
       return targetKeywords.some(keyword => item.mediaQuality.includes(keyword));
     } else if (item.type === 'Audio' && quality.includes('audio')) {
-      // For audio, check if quality matches
       if (quality === 'audio') {
-        return true;  // Return first audio (best quality)
+        return true;  // Return all audio items
       }
       return targetKeywords.some(keyword => item.mediaQuality.includes(keyword));
     }
     return false;
   });
+  
+  // For video qualities, sort by resolution (lowest first for SD, highest first for HD)
+  if (quality.includes('p') && filteredItems.length > 0) {
+    const qualityOrder = ['144p', '240p', '360p', '480p', '720p', '1080p'];
+    
+    if (['144p', '240p', '360p', '480p'].includes(quality)) {
+      // For SD qualities, return the closest but not higher than requested
+      filteredItems.sort((a, b) => {
+        const aIndex = qualityOrder.findIndex(q => a.mediaQuality.includes(q));
+        const bIndex = qualityOrder.findIndex(q => b.mediaQuality.includes(q));
+        return aIndex - bIndex; // Ascending order
+      });
+      
+      // Return the highest quality that doesn't exceed requested
+      const requestedIndex = qualityOrder.indexOf(quality);
+      const bestMatch = filteredItems.find(item => {
+        const itemIndex = qualityOrder.findIndex(q => item.mediaQuality.includes(q));
+        return itemIndex <= requestedIndex;
+      });
+      
+      return bestMatch || filteredItems[0]; // Fallback to first match if none found
+    } else {
+      // For HD qualities (720p, 1080p), return exact or closest higher
+      filteredItems.sort((a, b) => {
+        const aIndex = qualityOrder.findIndex(q => a.mediaQuality.includes(q));
+        const bIndex = qualityOrder.findIndex(q => b.mediaQuality.includes(q));
+        return bIndex - aIndex; // Descending order for HD
+      });
+      
+      return filteredItems[0];
+    }
+  }
+  
+  // For audio, return first match (or sort by bitrate if needed)
+  if (quality.includes('audio') && filteredItems.length > 0) {
+    if (quality === 'audio_128k') {
+      // Try to get 128K specifically
+      const exactAudio = filteredItems.find(item => item.mediaQuality.includes('128K'));
+      return exactAudio || filteredItems[0];
+    } else if (quality === 'audio_48k') {
+      // Try to get 48K specifically
+      const exactAudio = filteredItems.find(item => item.mediaQuality.includes('48K'));
+      return exactAudio || filteredItems[0];
+    }
+    return filteredItems[0];
+  }
+  
+  return filteredItems[0] || null;
 }
 
 // Get available qualities
